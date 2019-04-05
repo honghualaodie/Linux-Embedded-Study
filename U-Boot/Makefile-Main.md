@@ -151,7 +151,7 @@ export ARCH CPU BOARD VENDOR SOC
 ```
 - 由上面代码可以发现，当`OBJTREE`和`SRCTREE`值相等时，即两个目录都是一致的(本地编译情况)，`obj`为`空`  
 - `ARCH`定义的是当前编译的目标CPU的架构  
-- `include/config.mk`这个文件并不是源码自带文件，是在配置过程中(执行make ***_conifg)才会生成此文件
+- `include/config.mk`这个文件并不是源码自带文件，是在配置过程中(执行make xxxx_conifg)才会生成此文件
 - 导出了5个变量作为环境变量，这样导出作为环境变量，目的是可被人容易且集中的配置。配置的地方在主Makefile文件后面  
 如：  
 ```
