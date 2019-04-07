@@ -1,7 +1,7 @@
 # 根目录mkconfig文件分析
 
 ---
-####在主Makefile文件中的定义
+#### 在主Makefile文件中的定义
 在主Makefile文件中有类似下面这样的定义：
 
 ```bash
