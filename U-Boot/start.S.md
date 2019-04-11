@@ -430,6 +430,6 @@ _start_armboot:
 
 [虚拟地址]:https://blog.csdn.net/qq_34127958/article/details/72634164  
  
-[CP15_C1]: D:\WorkSpace\Linux-WorkSpace\Linux-Embedded-Study\U-Boot\images\CP15_C1.jpg  
-[CP15_C2]: D:\WorkSpace\Linux-WorkSpace\Linux-Embedded-Study\CP15_C2.jpg  
-[CP15_C3]: D:\WorkSpace\Linux-WorkSpace\Linux-Embedded-Study\CP15_C3.jpg 
+[CP15_C1]: https://github.com/honghualaodie/Linux-Embedded-Study/U-Bootimages/CP15_C1.jpg  
+[CP15_C2]: https://github.com/honghualaodie/Linux-Embedded-Study/U-Bootimages/CP15_C2.jpg  
+[CP15_C3]: https://github.com/honghualaodie/Linux-Embedded-Study/U-Bootimages/CP15_C3.jpg 
