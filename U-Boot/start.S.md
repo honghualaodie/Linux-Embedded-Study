@@ -430,6 +430,6 @@ _start_armboot:
 
 [虚拟地址]:https://blog.csdn.net/qq_34127958/article/details/72634164  
  
-[CP15_C1]: U-Boot/images/CP15_C1.jpg  
-[CP15_C2]: U-Boot/images/CP15_C2.jpg  
-[CP15_C3]: U-Boot/images/CP15_C3.jpg 
+[CP15_C1]: U-Boot/images/CP15_C1.jpg
+[CP15_C2]: U-Boot/images/CP15_C2.jpg
+[CP15_C3]: U-Boot/images/CP15_C3.jpg
