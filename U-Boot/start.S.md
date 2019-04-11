@@ -234,8 +234,11 @@ moveq	r3, #BOOT_EMMC43
 /* eMMC441 BOOT */
 cmp		r2, #0x28
 moveq	r3, #BOOT_EMMC441
+
+ldr	r0, =INF_REG_BASE
+str	r3, [r0, #INF_REG3_OFFSET] 
 ```
-- 通过上面判断出的启动方式（r2值），在此部分代码分析是哪种启动方式，由此可知，若 r2 = 0x04(SD/MMC启动方式)，r2 = 0x06(eMMC4.3启动方式)，r2 = 0x28(eMMC441启动方式)，并且将启动方式更新到 r3 寄存器中备用  
+- 通过上面判断出的启动方式（r2值），在此部分代码分析是哪种启动方式，由此可知，若 r2 = 0x04(SD/MMC启动方式)，r2 = 0x06(eMMC4.3启动方式)，r2 = 0x28(eMMC441启动方式)，并且将启动方式更新到 r3 寄存器中，并且将 r3 值写入到`INF_REG_BASE + INF_REG3_OFFSET`地址处备用  
 
 ---
 
@@ -251,27 +254,182 @@ str	r1, [r0]
 - PS 供电锁存，这个操作已经在`lowlevel_init.S`中定义了，其实完全可以将这三行删除，两次操作也不会有任何影响  
 
 ```
-	/* get ready to call C functions */
-	ldr	sp, _TEXT_PHY_BASE	/* setup temp stack pointer */
-	sub	sp, sp, #12
-	mov	fp, #0			/* no previous frame, so fp=0 */
+/* get ready to call C functions */
+ldr	sp, _TEXT_PHY_BASE	/* setup temp stack pointer */
+sub	sp, sp, #12
+mov	fp, #0			    /* no previous frame, so fp=0 */
 ```
 - 栈设置：这是第二次设置 sp 栈地址，第一次是在`lowlevel_init.S`开头部分定义的，第一次将栈设置在 SRAM 中，在本次，将栈设置到了 DDR 中(从上面描述可知为：0x43e00000)  
 再次配置栈的目的：此时 DDR 已经初始化，并且可以用，完全可以将栈设置到 DDR 中使用，并且在 SRAM 中空间是有限的，若溢出，并不安全
 
 ```ASM
-	/* when we already run in ram, we don't need to relocate U-Boot.
-	 * and actually, memory controller must be configured before U-Boot
-	 * is running in ram.
-	 */
-	ldr	r0, =0xff000fff
-	bic	r1, pc, r0		/* r0 <- current base addr of code */
-	ldr	r2, _TEXT_BASE	/* r1 <- original base addr in ram */
-	bic	r2, r2, r0		/* r0 <- current base addr of code */
-	cmp     r1, r2      /* compare r0, r1                  */
-	beq     after_copy  /* r0 == r1 then skip flash copy   */
+/* when we already run in ram, we don't need to relocate U-Boot.
+ * and actually, memory controller must be configured before U-Boot
+ * is running in ram.
+ */
+ldr	r0, =0xff000fff
+bic	r1, pc, r0		/* r0 <- current base addr of code */
+ldr	r2, _TEXT_BASE	/* r1 <- original base addr in ram */
+bic	r2, r2, r0		/* r0 <- current base addr of code */
+cmp r1, r2      /* compare r0, r1                  */
+beq after_copy  /* r0 == r1 then skip flash copy   */
 ```
 - 判断代码是否需要重定位，即程序是在哪里执行。再次使用相同的代码判断（上次是在`lowlevel_init.S`中判断是否为冷启动，若为冷启动，则需要初始化时钟和 DDR）
-- 若为冷启动情况，即 r1 和 r2 相等，则执行`after_copy`进行重定位操作，将 uboot 程序加载到 DDR 的链接地址中（CFG_PHY_UBOOT_BASE = 0x43e00000）  
+- 若为冷启动情况，即 r1 和 r2 不相等，即代表设备并非冷启动，则执行`after_copy`进行虚拟地址映射  
 
 ---
+
+#### 代码重定位  
+```ASM
+ldr  r0, =INF_REG_BASE
+ldr	 r1, [r0, #INF_REG3_OFFSET]
+cmp	 r1, #BOOT_NAND		/* 0x0 => boot device is nand */
+beq  nand_boot
+
+cmp	 r1, #BOOT_ONENAND	/* 0x1 => boot device is onenand */
+beq	 onenand_boot
+
+cmp  r1, #BOOT_EMMC441
+beq  emmc441_boot
+
+cmp  r1, #BOOT_EMMC43
+beq  emmc_boot
+
+cmp  r1, #BOOT_MMCSD
+beq  mmcsd_boot
+
+cmp  r1, #BOOT_NOR
+beq  nor_boot
+
+cmp  r1, #BOOT_SEC_DEV
+beq  mmcsd_boot
+```
+
+上面的代码已经通过读取外部 OM 引脚判断确定了是从哪里启动（EMMC、NOR、OneNAND...？）,并且将启动方式判断码保存到了`INF_REG_BASE + INF_REG3_OFFSET`  
+通过头两句，将保存的启动码从`INF_REG_BASE + INF_REG3_OFFSET`处读出到 r1 寄存器，并且判断是哪种启动方式，若匹配成功则跳转  
+如：  
+若通过上面的读取 OM 引脚判断是从 SD 卡启动，则在`INF_REG_BASE + INF_REG3_OFFSET`地址处保存有`BOOT_MMCSD`，即 0x6，在本段代码中读取此地址，与杜英标号判断，则匹配到并执行`mmcsd_boot`
+
+```ASM
+mmcsd_boot:
+#ifdef CONFIG_CLK_1000_400_200
+	ldr	r0, =CMU_BASE
+	ldr	r2, =CLK_DIV_FSYS2_OFFSET
+	ldr	r1, [r0, r2]
+	orr r1, r1, #0xf
+	str r1, [r0, r2]
+#endif
+	bl movi_uboot_copy
+	b  after_copy
+```
+- 主要的重定位代码是在`movi_uboot_copy`中  
+
+```C
+void movi_uboot_copy(void)
+{
+#ifdef CONFIG_EVT1
+	copy_sd_mmc_to_mem copy_bl2 = (copy_sd_mmc_to_mem)*(u32 *)(0x02020030);
+#else
+	copy_sd_mmc_to_mem copy_bl2 = (copy_sd_mmc_to_mem)(0x00002488);
+#endif
+#if defined(CONFIG_SECURE)
+	copy_bl2(MOVI_UBOOT_POS, MOVI_UBOOT_BLKCNT, CFG_PHY_UBOOT_BASE);
+#else
+	copy_bl2(MOVI_UBOOT_POS, MOVI_UBOOT_BLKCNT, CFG_PHY_UBOOT_BASE);//mj
+#endif
+}
+```
+- 代码路径在`cpu/arm_cortexa9/s5pc210`中的 movi.c 中
+- 待研究
+
+```ASM
+after_copy:
+
+#if defined(CONFIG_ENABLE_MMU)
+enable_mmu:
+	/* enable domain access */
+	ldr	r5, =0x0000ffff
+	mcr	p15, 0, r5, c3, c0, 0		@load domain access register
+
+	/* Set the TTB register */
+	ldr	r0, _mmu_table_base
+	ldr	r1, =CFG_PHY_UBOOT_BASE
+	ldr	r2, =0xfff00000
+	bic	r0, r0, r2
+	orr	r1, r0, r1
+	mcr	p15, 0, r1, c2, c0, 0
+
+	/* Enable the MMU */
+mmu_on:
+	mrc	p15, 0, r0, c1, c0, 0
+	orr	r0, r0, #1
+	mcr	p15, 0, r0, c1, c0, 0
+	nop
+	nop
+	nop
+	nop
+#endif
+```
+准备知识：  
+使能域访问（cp15的c3寄存器）  
+1)cp15协处理器内部有c0到c15共16个寄存器，这些寄存器每一个都有自己的作用。我们通过mrc和mcr指令来访问这些寄存器。所谓的操作cp协处理器其实就是操作cp15的这些寄存器  
+2)c3寄存器在mmu中的作用是控制域访问。域访问是和MMU的访问控制有关的
+
+- `CONFIG_ENABLE_MMU`宏是在`include\configs\itop_4412_ubuntu.h`中定义
+- [虚拟地址映射][虚拟地址]
+- ![CP15_C3][CP15_C3]  
+在CP15的C3寄存器中，划分了16个域，每个区域由两位构成，这两位说明了当前内存的检查权限：  
+00：当前级别下，该内存区域不允许被访问，任何的访问都会引起一个domain fault，这时AP位无效  
+01：当前级别下，该内存区域的访问必须配合该内存区域的段描述符中AP位进行权检查  
+10：保留状态（我们最好不要填写该值，以免引起不能确定的问题）
+11：当前级别下，对该内存区域的访问都不进行权限检查。这时AP位无效  
+所以只有当相应域的编码为01时，才会根据AP位和协处理器CP15中的C1寄存器的R，S位进行权限检查  
+- ![CP15_C2][CP15_C2]  
+TTB 是转换表的基地址，转换表是建立一套虚拟地址映射的关键。转换表分2部分，表索引和表项。表索引对应虚拟地址，表项对应物理地址。一对表索引和表项构成一个转换表单元，能够对一个内存块进行虚拟地址转换。（映射中基本规定中规定了内存映射和管理是以块为单位的，至于块有多大，要看你的MMU的支持和你自己的选择。在ARM中支持3种块大小，细表1KB、粗表4KB、段1MB）。真正的转换表就是由若干个转换表单元构成的，每个单元负责1个内存块，总体的转换表负责整个内存空间（0-4G）的映射。整个建立虚拟地址映射的主要工作就是建立这张转换表。转换表放置在内存中的，放置时要求起始地址在内存中要xx位对齐。转换表不需要软件去干涉使用，而是将基地址TTB设置到cp15的c2寄存器中，然后MMU工作时会自动去查转换表  
+宏观上理解转换表：整个转换表可以看作是一个int类型的数组，数组中的一个元素就是一个表索引和表项的单元。数组中的元素值就是表项，这个元素的数组下标就是表索引  
+`_mmu_table_base`指向的代码在 board\samsung\smdkc210 目录下的 lowlevel_init_POP.S 中定义。ARM的段式映射中长度为1MB，因此一个映射单元只能管1MB内存，那我们整个4G范围内需要4G/1MB=4096个映射单元，也就是说这个数组的元素个数是4096.实际上我们做的时候并没有依次单个处理这4096个单元，而是把4096个分成几部分，然后每部分用for循环做相同的处理  
+- ![CP15_C1][CP15_C1]  
+MMU就是memory management unit，内存管理单元。MMU实际上是SOC中一个硬件单元，它的主要功能就是实现虚拟地址到物理地址的映射  
+MMU单片在CP15协处理器中进行控制，也就是说要操控MMU进行虚拟地址映射，方法就是对cp15协处理器的寄存器进行编程  
+
+```ASM
+/* Set up the stack	*/
+stack_setup:
+#if defined(CONFIG_MEMORY_UPPER_CODE)
+	ldr	sp, =(CFG_UBOOT_BASE + CFG_UBOOT_SIZE - 0x1000)
+#else
+	ldr	r0, _TEXT_BASE		            /* upper 128 KiB: relocated uboot   */
+	sub	r0, r0, #CONFIG_SYS_MALLOC_LEN	/* malloc area                      */
+	sub	r0, r0, #CFG_GBL_DATA_SIZE      /* bdinfo                           */
+```
+- (1)这是第三次设置栈。这次设置栈还是将 sp 在DDR中，之前虽然已经在DDR中设置过一次栈了，但是本次设置栈的目的是将栈放在比较合适（安全，紧凑而不浪费内存）的地方  
+(2)我们实际将栈设置在uboot起始地址上方 2MB 处，这样安全的栈空间是：2MB-uboot 大小-0x1000=1.8MB左右。这个空间既没有太浪费内存，又足够安全。
+
+```ASM
+clear_bss:
+	ldr	r0, _bss_start		/* find start of bss segment  */
+	ldr	r1, _bss_end		/* stop here                  */
+	mov r2, #0x00000000		/* clear                      */
+
+clbss_l:
+	str	r2, [r0]		   /* clear loop...               */
+	add	r0, r0, #4
+	cmp	r0, r1
+	ble	clbss_l
+	
+	ldr	pc, _start_armboot
+
+_start_armboot:
+	.word start_armboot
+```
+- `_bss_start`和`_bss_end`是在`u-boot.lds`中定义的。目的是清理 bss 段代码  
+- `start_armboot`则直接跳转到启动的第二阶段
+
+
+
+
+[虚拟地址]:https://blog.csdn.net/qq_34127958/article/details/72634164  
+ 
+[CP15_C1]: D:\WorkSpace\Linux-WorkSpace\Linux-Embedded-Study\U-Boot\images\CP15_C1.jpg  
+[CP15_C2]: D:\WorkSpace\Linux-WorkSpace\Linux-Embedded-Study\CP15_C2.jpg  
+[CP15_C3]: D:\WorkSpace\Linux-WorkSpace\Linux-Embedded-Study\CP15_C3.jpg 
