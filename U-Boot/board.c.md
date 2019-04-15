@@ -218,4 +218,29 @@ uboot 机器码在 include\configs\itop_4412_ubuntu.h 中定义：`#define MACH_
 Timer4用来做计时时要使用到2个寄存器：TCNTB4、TCNTO4。TCNTB中存了一个数，这个数就是定时次数（每一次时间是由时钟决定的，其实就是由2级时钟分频器决定的）。我们定时时只需要把定时时间/基准时间=数，将这个数放入TCNTB中即可；我们通过TCNTO寄存器即可读取时间有没有减到0，读取到0后就知道定的时间已经到了。
 使用Timer4来定时，因为没有中断支持，所以CPU不能做其他事情同时定时，CPU只能使用轮询方式来不断查看TCNTO寄存器才能知道定时时间到了没。因为Timer4的定时是不能实现微观上的并行。uboot中定时就是通过Timer4来实现定时的。所以uboot中定时时不能做其他事（考虑下，典型的就是bootdelay，bootdelay中实现定时并且检查用户输入是用轮询方式实现的，原理类似轮询方式处理按键）
 interrupt_init函数将timer4设置为定时10ms。关键部位就是get_PCLK函数获取系统设置的PCLK_PSYS时钟频率，然后设置TCFG0和TCFG1进行分频，然后计算出设置为10ms时需要向TCNTB中写入的值，将其写入TCNTB，然后设置为auto reload模式，然后开定时器开始计时就没了。
-- `env_init`
+- `env_init`，一般从哪里启动就会把环境变量 env 放到哪里，各种介质存取操作 env 方法都不一样，因此 uboot 支持了各种不同介质中 env 的操作方法，这需要根据自己实际使用的存储介质来选择，而选择则通过配置文件 include\configs\itop_4412_ubuntu.h 来进行配置  
+本函数内容是对内存中维护的那份 uboot 的 env 做了基本初始化（判定指定地址的内存中是否有可用的环境变量），当前代码阶段，我们还没有从 SD 卡到 DDR 中的 relocate 重定位，则内存中的环境变量是不能够使用的  
+在 start_armboot 函数中的后面会通过调用 env_relocate() 函数对环境变量进行重定位，重定位后即可从指定的 DDR 中获取环境变量了
+- `init_baudrate`是初始化窗口波特率，且是在本文件中定义  
+```C
+static int init_baudrate (void)
+{
+	char tmp[64];	/* long enough for environment variables */
+	int i = getenv_r ("baudrate", tmp, sizeof (tmp));
+	gd->bd->bi_baudrate = gd->baudrate = (i > 0)
+			? (int) simple_strtoul (tmp, NULL, 10)
+			: CONFIG_BAUDRATE;
+
+	return (0);
+}
+```
+(1) getenv_r(,,)用于从环境变量读取需要读取的变量，第一个参数是需要读取的参数，第二个参数是都出的数，第三个是数的长度大小  
+读出的 `baudrate`的值（都出的数为字符串类型），使用 simple_strtoul(,,)转换成 int 类型。若读出的数大于0，则将读出的数保存到 gd 和 bd 关于波特率的变量中，否则保存为 include\configs\itop_4412_ubuntu.h 中设置的 CONFIG_BAUDRATE(#define CONFIG_BAUDRATE 115200)  
+- `serial_init`，目录 cpu\arm_cortexa9\s5pc210\serial.c ，实际本函数并没有什么实质性的内容，只是进行了for(;;)空循环而已，由于在汇编部分已经对串口进行了初始化  
+- `console_init_f`在 common\console.c 中，本函数是控制台的第一阶段初始化，_f表示是第一阶段初始化，_r表示第二阶段初始化。有时候初始化函数不能一次完成，在 start_armboot 函数中进行了第二次初始化 console_init_r()。本函数只是对 gd->have_console 设置为1  
+控制台就是一个用软件虚拟出来的设备，这个设备有一套专用的通信函数（发送、接收···），控制台的通信函数最终会映射到硬件的通信函数中来实现。 uboot 中实际上控制台的通信函数是直接映射到硬件串口的通信函数中的，也就是说 uboot 中用没用控制器其实并没有本质差别  
+控制台的通信函数映射到硬件通信函数时可以用软件来做一些中间优化，譬如说缓冲机制。（操作系统中的控制台都使用了缓冲机制，所以有时候我们 printf 了内容但是屏幕上并没有看到输出信息，就是因为被缓冲了。我们输出的信息只是到了 console 的 buffer 中， buffer 还没有被刷新到硬件输出设备上，尤其是在输出设备是 LCD 屏幕时  
+####printf() → puts() → serial_puts() → serial_putc() → 硬件寄存器输出####
+- `display_banner`，即在控制台打印 logo  
+- `print_cpuinfo`，目录 cpu\arm_cortexa9\s5pc210\cpu_info.c ，根据 include\configs\itop_4412_ubuntu.h 定义的宏打印相关信息，比较容易分析，略过
+- 
