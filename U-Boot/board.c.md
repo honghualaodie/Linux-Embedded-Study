@@ -65,7 +65,7 @@ typedef struct bd_info {
 - `unsigned long	bi_ip_addr;`：开发板 IP 地址  
 - `struct environment_s *bi_env;`：
 - `ulong bi_arch_number;`：机器码
-- `ulong bi_boot_params;`：启动参数地址，是 uboot 启动内核是传给 kernel 的参数的地址
+- `ulong bi_boot_params;`：启动参数地址，是 uboot 启动内核时传给 kernel 的参数的地址
 - `bi_dram[CONFIG_NR_DRAM_BANKS]` ：保存有 DDR 信息，开发板根据这个结构体知道板子上面有几片 DDR ，以及 DDR 容量和地址
 
 #### 内存分配
@@ -83,6 +83,9 @@ memset (gd->bd, 0, sizeof (bd_t));
 - 内存分配待分析
 - `__asm__`是 gcc 内嵌汇编，即 C 和汇编混合汇编的关键字。`__volatile__`为 C 语言的 volatile 。此句代码意义是：当 gcc 编译器版本大于 3.4 时，为了防止程序优化导致不可预知错误
 - 使用 `memset`对 gd 和 bd 进行复位清零，防止后面使用时出现不可预知的问题。新申请的内存不一定是干净的，清零是必须的
+
+---
+---
 
 #### 硬件初始化
 
@@ -240,7 +243,310 @@ static int init_baudrate (void)
 - `console_init_f`在 common\console.c 中，本函数是控制台的第一阶段初始化，_f表示是第一阶段初始化，_r表示第二阶段初始化。有时候初始化函数不能一次完成，在 start_armboot 函数中进行了第二次初始化 console_init_r()。本函数只是对 gd->have_console 设置为1  
 控制台就是一个用软件虚拟出来的设备，这个设备有一套专用的通信函数（发送、接收···），控制台的通信函数最终会映射到硬件的通信函数中来实现。 uboot 中实际上控制台的通信函数是直接映射到硬件串口的通信函数中的，也就是说 uboot 中用没用控制器其实并没有本质差别  
 控制台的通信函数映射到硬件通信函数时可以用软件来做一些中间优化，譬如说缓冲机制。（操作系统中的控制台都使用了缓冲机制，所以有时候我们 printf 了内容但是屏幕上并没有看到输出信息，就是因为被缓冲了。我们输出的信息只是到了 console 的 buffer 中， buffer 还没有被刷新到硬件输出设备上，尤其是在输出设备是 LCD 屏幕时  
-####printf() → puts() → serial_puts() → serial_putc() → 硬件寄存器输出####
+
+#### printf() → puts() → serial_puts() → serial_putc() → 硬件寄存器输出 ####
 - `display_banner`，即在控制台打印 logo  
 - `print_cpuinfo`，目录 cpu\arm_cortexa9\s5pc210\cpu_info.c ，根据 include\configs\itop_4412_ubuntu.h 定义的宏打印相关信息，比较容易分析，略过
-- 
+- `checkboard`，用于检查当前开发板是哪个开发板，并且打印开发板的名字  
+`printf("Board:	%s%s\n", CONFIG_DEVICE_STRING,CORE_NUM_STR);`，`CONFIG_DEVICE_STRING`在 include\configs\itop_4412_ubuntu.h 中定义  
+- `dram_init`，对于 DDR 已经在 uboot 第一部分汇编初始化过了，这里再次初始化是对 gd->bd->bi_dram 全局结构体变量进行初始化，是软件方面的初始化。而 gd->bd 记录的是当前开发板 DDR 的配置信息， uboot 是使用 gd->bd 来使用内存的  
+
+```C
+nr_dram_banks = 8;
+gd->bd->bi_dram[0].start = PHYS_SDRAM_1;
+gd->bd->bi_dram[0].size = PHYS_SDRAM_1_SIZE;
+gd->bd->bi_dram[1].start = PHYS_SDRAM_2;
+gd->bd->bi_dram[1].size = PHYS_SDRAM_2_SIZE;
+gd->bd->bi_dram[2].start = PHYS_SDRAM_3;
+gd->bd->bi_dram[2].size = PHYS_SDRAM_3_SIZE;
+gd->bd->bi_dram[3].start = PHYS_SDRAM_4;
+gd->bd->bi_dram[3].size = PHYS_SDRAM_4_SIZE;
+gd->bd->bi_dram[4].start = PHYS_SDRAM_5;
+gd->bd->bi_dram[4].size = PHYS_SDRAM_5_SIZE;
+gd->bd->bi_dram[5].start = PHYS_SDRAM_6;
+gd->bd->bi_dram[5].size = PHYS_SDRAM_6_SIZE;
+gd->bd->bi_dram[6].start = PHYS_SDRAM_7;
+gd->bd->bi_dram[6].size = PHYS_SDRAM_7_SIZE;
+gd->bd->bi_dram[7].start = PHYS_SDRAM_8;
+gd->bd->bi_dram[7].size = PHYS_SDRAM_8_SIZE;
+```
+根据源代码可知，实际运行的就是类似上面的这段代码，其实就是将 include\configs\itop_4412_ubuntu.h 中定义的 DDR 内存的宏对 gd->bd->bi_dram 进行初始化，通过这样， uboot 就可以读取 gd->bd->bi_dram 得知开发板焊接的是多大的 DDR 了  
+
+- `display_dram_config`，用于计算打印当前开发板内存容量信息  
+
+```C
+ulong size = 0;
+
+for (i=0; i<CONFIG_NR_DRAM_BANKS; i++) {
+	size += gd->bd->bi_dram[i].size;
+}
+
+puts("DRAM:	");
+print_size(size, "\n");
+
+return (0);
+```
+根据分析，这个函数实际运行的就是上面的这段代码。其实这段代码就是根据上面`dram_init`函数保存的`gd->bd->bi_dram`进行累加操作计算出 DDR 总容量  
+
+---
+---
+
+```C
+/* armboot_start is defined in the board-specific linker script */
+mem_malloc_init (_armboot_start - CONFIG_SYS_MALLOC_LEN,
+		CONFIG_SYS_MALLOC_LEN);
+```
+```
+void mem_malloc_init(ulong start, ulong size)
+{
+	mem_malloc_start = start;
+	mem_malloc_end = start + size;
+	mem_malloc_brk = start;
+
+	memset((void *)mem_malloc_start, 0, size);
+}
+```
+- 用来初始化 uboot 堆管理器，经过初始化后，后面就可以使用 malloc、free 进行内存申请和释放。具体在内存中堆的地址分布请参见![内存分布分析][内存分布分析]
+
+`display_flash_config (flash_init ());`  
+- `display_flash_config()`负责打印 norflash 容量  
+- flash_init ()，用于对 norflash 进行初始化，实际开发板上面并没有 norflash ，使用的是 inand，但是此处初始化并不会影响其它部分的运行，去掉也可以  
+
+注：  
+CONFIG_VFD 和 CONFIG_LCD 是显示相关的，这个是 uboot 中自带的 LCD 显示的软件架构。但是实际上我们用 LCD 而没有使用 uboot 中设置的这套软件架构，我们自己在后面自己添加了一个 LCD 显示的部分。实际 CONFIG_VFD 和 CONFIG_LCD 在  include\configs\itop_4412_ubuntu.h 中也并没有定义  。
+
+##### NAND 初始化
+```C
+#ifdef CONFIG_GENERIC_MMC
+	puts ("MMC:   ");
+	mmc_exist = mmc_initialize (gd->bd);
+	if (mmc_exist != 0)
+	{
+		puts ("0 MB\n");
+	}
+#endif
+```
+- 在 include\configs\itop_4412_ubuntu.h 中定义了 CONFIG_GENERIC_MMC 。 `mmc_initialize()`在目录 drivers\mmc\mmc.c 中定义  
+```C
+int mmc_initialize(bd_t *bis)
+{
+	struct mmc *mmc;
+	int err,dev;
+	
+	INIT_LIST_HEAD (&mmc_devices);
+	cur_dev_num = 0;
+
+	if (board_mmc_init(bis) < 0)
+		cpu_mmc_init(bis);
+
+#if defined(DEBUG_S3C_HSMMC)
+	print_mmc_devices(',');
+#endif
+	for (dev = 0; dev < cur_dev_num; dev++) 
+	{
+		mmc = find_mmc_device(dev);
+
+		if (mmc) 
+		{
+			err = mmc_init(mmc);
+...
+...
+...
+```
+- `INIT_LIST_HEAD`初始化一个链表，用于链接多个 mmc
+- `cur_dev_num = 0`代表第0个 mmc 设备
+- `board_mmc_init(bis)`实际定义是空函数，并没有执行什么具体代码，直接返回 -1
+- `cpu_mmc_init(bis)`，在目录 cpu\arm_cortexa9\cpu.c 
+```C
+/*
+ * Initializes on-chip MMC controllers.
+ * to override, implement board_mmc_init()
+ */
+int cpu_mmc_init(bd_t *bis)
+{
+	int ret;
+#if defined(CONFIG_S3C_HSMMC) || defined(CONFIG_S5P_MSHC)
+	setup_hsmmc_clock();
+	setup_hsmmc_cfg_gpio();
+#endif
+#ifdef USE_MMC4
+	ret = smdk_s5p_mshc_init();
+#endif
+#ifdef USE_MMC2
+	ret = smdk_s3c_hsmmc_init();
+#endif
+	return ret;
+}
+```
+- 上面代码中提到的宏均在 include\configs\itop_4412_ubuntu.h 中有定义
+- 用于对 cpu 内部寄存器关于 mmc 进行初始化，追踪的话，可以发现，这个函数下调用的函数都是底层配置代码，直接操作 cpu 寄存器的
+
+---
+
+#### 环境变量重定位
+
+1、环境变量的概念
+
+     可以理解为用户对软件的全局配置信息，这部分信息应该可以从永久性存储器上读取，能被查询，能被修改。
+
+　 启动过程中，应该首先把环境变量读取到合适的内存区域，然后利用环境变量初始化硬件、启动操作系统等等。
+
+2、启动过程中环境变量初始化过程涉及的问题
+
+       这里涉及到两个问题：
+
+　　　环境变量在哪个地方存着（从哪个地方取）
+
+　　　将环境变量存储到哪里（放到哪）  
+
+---
+
+```C
+/* initialize environment */
+env_relocate ();
+```
+
+```C
+void env_relocate (void)
+{
+#ifndef CONFIG_RELOC_FIXUP_WORKS
+	DEBUGF ("%s[%d] offset = 0x%lx\n", __FUNCTION__,__LINE__,
+		gd->reloc_off);
+#endif
+
+#ifdef CONFIG_AMIGAONEG3SE
+	enable_nvram();
+#endif
+
+#ifdef ENV_IS_EMBEDDED
+	/*
+	 * The environment buffer is embedded with the text segment,
+	 * just relocate the environment pointer
+	 */
+#ifndef CONFIG_RELOC_FIXUP_WORKS
+	env_ptr = (env_t *)((ulong)env_ptr + gd->reloc_off);
+#endif
+	DEBUGF ("%s[%d] embedded ENV at %p\n", __FUNCTION__,__LINE__,env_ptr);
+#else
+	/*
+	 * We must allocate a buffer for the environment
+	 */
+	env_ptr = (env_t *)malloc (CONFIG_ENV_SIZE);
+	DEBUGF ("%s[%d] malloced ENV at %p\n", __FUNCTION__,__LINE__,env_ptr);
+#endif
+
+	if (gd->env_valid == 0) {
+#if defined(CONFIG_GTH)	|| defined(CONFIG_ENV_IS_NOWHERE)	/* Environment not changable */
+		puts ("Using default environment\n\n");
+#else
+		puts ("*** Warning - bad CRC, using default environment\n\n");
+		show_boot_progress (-60);
+#endif
+		set_default_env();
+	}
+	else {
+		env_relocate_spec ();
+	}
+	gd->env_addr = (ulong)&(env_ptr->data);
+
+#ifdef CONFIG_AMIGAONEG3SE
+	disable_nvram();
+#endif
+}
+```
+- 未找到 `ENV_IS_EMBEDDED`有定义，则执行下面代码：  
+```C
+/*
+ * We must allocate a buffer for the environment
+ */
+env_ptr = (env_t *)malloc (CONFIG_ENV_SIZE);
+DEBUGF ("%s[%d] malloced ENV at %p\n", __FUNCTION__,__LINE__,env_ptr);
+```
+申请并获取环境变量的内存地址  
+
+##### 环境变量从哪里来？  
+SD卡中有一些（8个）独立的扇区作为环境变量存储区域的。但是我们烧录/部署系统时，我们只是烧录了uboot分区、kernel分区和rootfs分区，根本不曾烧录env分区。所以当我们烧录完系统第一次启动时ENV分区是空的，本次启动uboot尝试去SD卡的ENV分区读取环境变量时失败（读取回来后进行CRC校验时失败），我们uboot选择从uboot内部代码中设置的一套默认的环境变量出发来使用（这就是默认环境变量）；这套默认的环境变量在本次运行时会被读取到DDR中的环境变量中，然后被写入（也可能是你saveenv时写入，也可能是uboot设计了第一次读取默认环境变量后就写入）SD卡的ENV分区。然后下次再次开机时uboot就会从SD卡的ENV分区读取环境变量到DDR中，这次读取就不会失败了。
+
+```C
+	if (gd->env_valid == 0) {
+#if defined(CONFIG_GTH)	|| defined(CONFIG_ENV_IS_NOWHERE)	/* Environment not changable */
+		puts ("Using default environment\n\n");
+#else
+		puts ("*** Warning - bad CRC, using default environment\n\n");
+		show_boot_progress (-60);
+#endif
+		set_default_env();
+	}
+```
+- 由于第一次开机 `gd->env_valid`并未设置，则会执行上面的代码 。`show_boot_progress()` 的作用是便于调试，告诉当前进行到什么地方了
+- `set_default_env()`是对获取到的 env 内存区域进行初步配置：清0、复制系统预先定制的默认环境变量到新申请的内存地址处、CRC校验更新  
+
+若非第一次开机，则会执行 `env_relocate_spec ();`，真正的从SD卡到DDR中重定位 ENV 的代码是在 env_relocate_spec 内部的 movi_read_env 完成的。
+
+`gd->bd->bi_ip_addr = getenv_IPaddr ("ipaddr");`  
+开发板的 IP 地址是在 gd->bd 中维护的，来源于环境变量 ipaddr 。 getenv 函数用来获取字符串格式的 IP 地址，然后用 string_to_ip 将字符串格式的IP地址转成字符串格式的点分十进制格式。 IP 地址由4个0-255之间的数字组成，因此一个IP地址在程序中最简单的存储方法就是一个 unsigend int 。但是人类容易看懂的并不是这种类型，而是点分十进制类型（192.168.1.2）。这两种类型可以互相转换
+
+`stdio_init ();	/* get the devices list going. */`  
+放在这里初始化的设备都是驱动设备，这个函数本来就是从驱动框架中衍生出来的。 uboot 中很多设备的驱动是直接移植linux内核的（譬如网卡、SD 卡）， linux 内核中的驱动都有相应的设备初始化函数。linux内核在启动过程中就有一个 devices_init (名字不一定完全对，但是差不多)，作用就是集中执行各种硬件驱动的 init 函数。 uboot 的这个函数其实就是从 linux 内核中移植过来的，它的作用也是去执行所有的从 linux 内核中继承来的那些硬件驱动的初始化函数。  
+实际这个函数中很多宏是未定义的
+
+`jumptable_init ();`：实际未发现有什么用  
+
+`console_init_r ();	/* fully init console as a device */`:是对软件架构方面的初始化，即对相关的结构体进行初始化。因为在前面已经对串口做过初始化，并且已经能够使用 printf() 函数直接通过硬件输出打印，实际也是通过这样的方式实现的，这里做这样的初始化其实没什么意义，到头来还是调用底层进行输出打印  
+
+`enable_interrupts ();`：实际并未使用中断，其实在 uboot 中并不常用中断，追踪代码的话，这个函数内容定义是空的，返回为 0  
+
+```C
+if ((s = getenv ("loadaddr")) != NULL) {
+	load_addr = simple_strtoul (s, NULL, 16);
+}
+```
+从已初始化的环境变量中获取加载地址并更新到 load_addr 变量。`simple_strtoul`功能是将一个字符串转换成 unsigend long 型数据
+
+```C
+#ifdef BOARD_LATE_INIT
+	board_late_init ();
+#endif
+```
+`BOARD_LATE_INIT`在 include\configs\itop_4412_ubuntu.h 中定义了。`board_late_init()`定义在 board\samsung\smdkc210\smdkc210.c 中。  
+在这个里面是对剩余的一些板级初始化。在 iTop4412 提供的 uboot 中，在这个函数中对 bootcmd 环境变量进行了修改，搞不懂为啥要写到这个地方，在 common\env_common.c 目录文件中的 default_environment[]中是有对这个变量的初始化，按道理应该是在 include\configs\itop_4412_ubuntu.h 中对 `CONFIG_BOOTCOMMAND`宏进行配置即可  
+
+```C
+#ifdef CONFIG_RECOVERY //mj for factory reset
+	recovery_preboot();
+#endif
+```
+`CONFIG_RECOVERY`在 include\configs\itop_4412_ubuntu.h 中定义了  
+```C
+/* add by cym 20141211 GPX1_1 */
+int value = 0;
+
+char run_cmd[50];
+
+value = __REG(GPX1DAT);
+
+if(0x2 == (value & 0x2))//not press
+{
+	printf("SYSTEM ENTER NORMAL BOOT MODE\n");
+}
+else	//press
+{
+	printf("SYSTEM ENTER Updating MODE\n");
+
+	sprintf(run_cmd, "sdfuse flashall");
+	run_command(run_cmd, 0);
+}
+/* end add */
+
+return 0;
+```
+在`recovery_preboot()`函数中实际执行的应该是上面的这段代码，通过读取 GPIO 判断是否需要更新固件，我们可以将要升级的镜像放到 SD 卡的固定目录中，然后开机时在 uboot 启动的最后阶段检查升级标志（是一个按键，这个按键如果按下则表示 update mode，如果启动时未按下则表示 boot mode ）。如果进入 update mode 则 uboot 会自动从 SD 卡中读取镜像文件然后烧录到 iNand 中；如果进入 boot mode 则 uboot 不执行 update ，直接启动正常运行。这种机制能够帮助我们快速烧录系统，常用于量产时用 SD 卡进行系统烧录部署  
+
+
+
+
+
+
+
+
+[内存分布分析]: 
